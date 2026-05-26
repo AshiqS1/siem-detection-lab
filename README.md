@@ -85,7 +85,7 @@ A three-tier snapshot methodology was adopted across all VMs:
 Installation & Initial Configuration: 
 - OS: pfSense Plus Community Edition (FreeBSD-based).
 - Interfaces: `em0` = WAN; `em1` = LAN.
-- LAN Setup: Static IPv4 `10.0.0.1/24`; Kea DHCP enabled (`10.0.0.100`–`199`).
+- LAN Setup: Static IPv4 `10.0.0.1/24`; Kea DHCP enabled (IP Range `10.0.0.100`-`199`).
 - Hostname: `ASH-FW-PFS`; Domain: `lab.internal`.
 - Time: UTC (`Etc/UTC`); NTP: `2.pfsense.pool.ntp.org`.
 - Admin Portal: Default credentials (`admin` / `pfsense`) changed during wizard; later disabled entirely.
@@ -117,14 +117,14 @@ Suricata IDS:
 - Troubleshooting: During setup, the firewall crashed due to swap memory exhaustion (caused by enabling too many rules). This issue was resolved by changing the Firewall VM's RAM from 1GB to 2GB, and selecting a limited ruleset (ET Open + essential categories only). 
 
 Enable Firewall Logging and Forward Logs to SIEM:
-1. **Syslog (pfSense system / firewall logs):**
+1. *Syslog (pfSense system / firewall logs):*
    - Syslog format changed from BSD (RFC 3164) to syslog (RFC 5424) for enhanced compatibility with 'TA-pfsense' plugin.
    - Remote logging enabled and configured to forward logs to `10.0.0.210:1514/udp` (i.e. Port 1514 on the SIEM server).
-   - Note: Port 514 is the default for Syslog. However, I used a non-standard port `1514` (i.e. not in 0-1024 range) instead because Splunk is running as a non-root underprivileged `splunk` user which doesn't have permissions to modify assignments for well known ports (0-1024).
+     - Note: Port `514` is the default for Syslog. However, I used a non-standard port `1514` (i.e. not in `0-1024` range) instead because Splunk is running as a non-root underprivileged `splunk` user on the firewall, which doesn't have permissions to modify assignments for well known ports (`0-1024`).
    - Splunk input configured: sourcetype=`pfsense`, index=`pfsense`.
    - Installed TA-pfsense add-on on Splunk to normalize sourcetypes.
 
-2. **Suricata EVE JSON (IDS alerts):**
+2. *Suricata EVE JSON (IDS alerts):*
    - Logs written to `/var/log/suricata/`.
    - Installed Splunk Universal Forwarder (SUF) on the firewall.
    - Created `splunk` service user and group on pfSense.
@@ -137,17 +137,49 @@ Enable Firewall Logging and Forward Logs to SIEM:
    - Added Shellcmd package to auto-start Splunk Forwarder on boot (`/opt/splunkforwarder/bin/splunk start`).
    - Added Shellcmd package to restart `syslogd` service on boot (`/usr/sbin/service/syslogd restart`) to ensure syslog forwarding persists upon firewall reboot.
 
+## *3.3. SIEM Server - ASH-LIN-SIEM (Splunk Enterprise)*
 
+Host Setup: 
+- OS: Linux Debian (GNU/Linux 13, GUI with GNOME).
+- User: joej (sudoers group).
+- Username: Joe Johnson.
+- Static IP: `10.0.0.210/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
+- IPv6: Disabled via `sysctl`.
 
+Host Firewall Rules (UFW): 
+- `sudo ufw allow in 9997/tcp` — Splunk Forwarder data ingress.
+- `sudo ufw allow in from 10.0.0.1 to any port 1514 proto udp` — Syslog from firewall.
+- Port `8000/tcp` (Splunk Web UI) and `8089/tcp` (Splunkd management) intentionally left closed to LAN to reduce attack surface; UI accessed locally on the SIEM server only.
+- Default deny incoming; allow outgoing.
 
+Splunk Enterprise Installation:
+- Version: Splunk Enterprise `10.2.3` (`.deb` package).
+- Install Path: `/opt/splunk`.
+- Service Account: `splunk` user/group owns `/opt/splunk`.
+- Admin Credentials: `siemadmin` / `companysplunk`.
+- Boot Start: `sudo /opt/splunk/bin/splunk enable boot-start -user splunk`.
+- Receiving: Enabled on port `9997/tcp` (`Splunk UI > Settings > Forwarding and Receiving`).
 
+Indexing Strategy in Splunk:
+| # | Index | Purpose | Sources |
+| - |---|---|---|
+| 1 | `pfsense` | Firewall (syslog) | `ASH-FW-PFS` |
+| 2 | `suricata` | IDS (eve.json) | `ASH-FW-PFS` (WAN & LAN Interfaces) |
+| 3 | `linux` | Linux OS | `ASH-LIN-USER`, `ASH-LIN-SQLDB` |
+| 4 | `windows` | Windows OS / Sysmon | `ASH-WIN-USER` |
+| 5 | `_audit` | Splunk Internal Auditing | `ASH-LIN-SIEM` |
 
+Add-ons Installed:
+- Splunk Add-on for Unix and Linux (`Splunk_TA_nix`): Deployed on forwarders and SIEM for field extraction.
+- TA-pfsense: For pfSense log parsing and sourcetype assignment.
 
+Quality of Life & Troubleshooting:
+- Installed `tcpdump` to verify packet flow on ports `1514` and `9997`.
+- Used `dbinspect` and `eventcount` SPL commands to monitor index sizes and event counts.
+- Cleaned old event data and removed deprecated indexes to prevent double-ingestion and storage bloat.
+  - `sudo /opt/splunk/bin/splunk clean eventdata -index index_name` 
 
-
-
-
-
+## *3.4. Linux Workstation - Linux Workstation (Ubuntu)*
 
 
 
