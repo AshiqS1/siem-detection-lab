@@ -58,30 +58,29 @@ graph TD
     SIEM <-->|9997/tcp| WAN
 ```
 
-
 ## 3. Lab Setup and Device Configuration
-### *3.1. Hypervisor - VMware Workstation Pro*
+## *3.1. Hypervisor - VMware Workstation Pro*
 
 Why choose VMware Workstation Pro compared to other Type-2 Hypervisors?
-- **Hyper-V:** Unavailable on Windows 11 Home without a Pro license upgrade.
-- **VirtualBox:** Familiar but skipped to gain experience with the VMware ecosystem (relevant to enterprise vSphere environments).
-- **VMware Workstation Pro:** Chosen because Broadcom made it free for personal use. Version 17.6.4 (Build 24832109) was downloaded and hash-verified via PowerShell (`Get-FileHash` with SHA256 and MD5).
+- Hyper-V: Unavailable on Windows 11 Home without a Pro license upgrade.
+- VirtualBox: Familiar but skipped to gain experience with the VMware ecosystem (relevant to enterprise vSphere environments).
+- VMware Workstation Pro: Chosen because Broadcom made it free for personal use. Version 17.6.4 (Build 24832109) was downloaded and hash-verified via PowerShell (`Get-FileHash` with SHA256 and MD5).
 
-Host Preparation: 
-- Enabled **Windows Hypervisor Platform** in Windows Features (required for Workstation Pro on Win11).
+Host Setup: 
+- Enabled Windows Hypervisor Platform in Windows Features (required for Workstation Pro on Win11).
 - Rebooted host to apply changes.
 
 Virtual Networking: 
-- **NAT (`VMnet8`):** `192.168.183.0/24`. Assigned to the firewall’s WAN adapter.
-- **LAN Segment (`ASH-INT-LAN`):** Custom segment created in Workstation. All internal VMs (except the firewall’s WAN) attach here.
-- 
-**Snapshot Strategy**
-A three-tier snapshot methodology was adopted across all VMs:
-1. **Base-Snapshot:** OS installed, initial hardening, users created.
-2. **Base-Snapshot-2:** Static IP assigned, IPv6 disabled, host firewall enabled, logging configured.
-3. **Base-Snapshot-3:** Pre-detection baseline. All logs verified flowing into correct Splunk indexes.
+- NAT (`VMnet8`): `192.168.183.0/24`. Assigned to the firewall’s WAN adapter.
+- LAN Segment (`ASH-INT-LAN`): Custom segment created in Workstation. All internal VMs (except the firewall’s WAN) attach here.
 
-### *3.2. Network Firewall - ASH-FW-PFS (pfSense)*
+Snapshot Strategy:
+A three-tier snapshot methodology was adopted across all VMs:
+1. Base-Snapshot: OS installed, initial hardening, users created.
+2. Base-Snapshot-2: Static IP assigned, IPv6 disabled, host firewall enabled, logging configured.
+3. Base-Snapshot-3: Pre-detection baseline. All logs verified flowing into correct Splunk indexes.
+
+## *3.2. Network Firewall - ASH-FW-PFS (pfSense)*
 
 Installation & Initial Configuration: 
 - OS: pfSense Plus Community Edition (FreeBSD-based).
@@ -97,4 +96,65 @@ Hardening:
 - Changed DHCP server backend from deprecated ISC DHCP to **Kea DHCP**.
 - Created non-default admin user `ash` (group: `admins`); disabled login for default user `admin`.
 - Enabled SSH access with `Password or Public Key` (port 22).
+
+Firewall Rules (LAN):
+| Rule | Protocol | Source | Destination | Port | Action | Status |
+|---|---|---|---|---|---|---|
+| Anti-Lockout | * | * | LAN Address | 443, 80, 22 | Allow | Enabled |
+| Default Allow LAN | * | * | * | * | Allow | Enabled |
+| Default Allow LAN IPv6 | * | * | * | * | Allow | Block | Disabled |
+
+Firewall Rules (WAN):
+- No custom rules defined for this interface.
+- By default, all incoming connections on this interface will be blocked until pass rules are added. 
+
+Suricata IDS:
+- Installed Suricata package (`v7.0.8_5`) and Open-VM-Tools.
+- Disabled Hardware Checksum Offloading, TCP Segmentation Offloading, and Large Receive Offloading (`System > Advanced > Networking`) to prevent Suricata packet loss.
+- Added an Oinkcode for Snort rule updates.
+- Enabled Suricata on both WAN and LAN in IDS (legacy) mode.
+- WAN: IPS intentionally disabled to avoid self-lockout during testing.
+- Troubleshooting: During setup, the firewall crashed due to swap memory exhaustion (caused by enabling too many rules). This issue was resolved by changing the Firewall VM's RAM from 1GB to 2GB, and selecting a limited ruleset (ET Open + essential categories only). 
+
+Enable Firewall Logging and Forward Logs to SIEM:
+1. **Syslog (pfSense system / firewall logs):**
+   - Syslog format changed from BSD (RFC 3164) to syslog (RFC 5424) for enhanced compatibility with 'TA-pfsense' plugin.
+   - Remote logging enabled and configured to forward logs to `10.0.0.210:1514/udp` (i.e. Port 1514 on the SIEM server).
+   - Note: Port 514 is the default for Syslog. However, I used a non-standard port `1514` (i.e. not in 0-1024 range) instead because Splunk is running as a non-root underprivileged `splunk` user which doesn't have permissions to modify assignments for well known ports (0-1024).
+   - Splunk input configured: sourcetype=`pfsense`, index=`pfsense`.
+   - Installed TA-pfsense add-on on Splunk to normalize sourcetypes.
+
+2. **Suricata EVE JSON (IDS alerts):**
+   - Logs written to `/var/log/suricata/`.
+   - Installed Splunk Universal Forwarder (SUF) on the firewall.
+   - Created `splunk` service user and group on pfSense.
+   - Used `setfacl` to grant `splunk` user read/execute access to `/var/log/suricata`.
+   - Updated the inputs.conf, outputs.conf, props.conf, and transforms.conf files to reduce & tune-out log noise.
+   - Monitors configured in `inputs.conf`:
+     - `[monitor:///var/log/suricata/suricata_em051045/eve.json*]` → `index=suricata`, `sourcetype=suricata:wan`
+     - `[monitor:///var/log/suricata/suricata_em144243/eve.json*]` → `index=suricata`, `sourcetype=suricata:lan`
+   - `outputs.conf` points to `10.0.0.210:9997` (i.e. Port 9997 on the SIEM server). 
+   - Added Shellcmd package to auto-start Splunk Forwarder on boot (`/opt/splunkforwarder/bin/splunk start`).
+   - Added Shellcmd package to restart `syslogd` service on boot (`/usr/sbin/service/syslogd restart`) to ensure syslog forwarding persists upon firewall reboot.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
