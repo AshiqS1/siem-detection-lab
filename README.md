@@ -82,8 +82,8 @@ A three-tier snapshot methodology was adopted across all VMs:
 
 ## *3.2. Network Firewall - ASH-FW-PFS (pfSense)*
 
-Installation & Initial Configuration: 
-- OS: pfSense Plus Community Edition (FreeBSD-based).
+Host Setup: 
+- OS: pfSense Plus Community Edition 2.8.1 (FreeBSD 15.0).
 - Interfaces: `em0` = WAN; `em1` = LAN.
 - LAN Setup: Static IPv4 `10.0.0.1/24`; Kea DHCP enabled (IP Range `10.0.0.100`-`199`).
 - Hostname: `ASH-FW-PFS`; Domain: `lab.internal`.
@@ -141,8 +141,7 @@ Enable Firewall Logging and Forward Logs to SIEM:
 
 Host Setup: 
 - OS: Linux Debian (GNU/Linux 13, GUI with GNOME).
-- User: joej (sudoers group).
-- Username: Joe Johnson.
+- User: ash (sudoers group).
 - Static IP: `10.0.0.210/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
 - IPv6: Disabled via `sysctl`.
 
@@ -150,7 +149,7 @@ Host Firewall Rules (UFW):
 - `sudo ufw allow in 9997/tcp` — Splunk Forwarder data ingress.
 - `sudo ufw allow in from 10.0.0.1 to any port 1514 proto udp` — Syslog from firewall.
 - Port `8000/tcp` (Splunk Web UI) and `8089/tcp` (Splunkd management) intentionally left closed to LAN to reduce attack surface; UI accessed locally on the SIEM server only.
-- Default deny incoming; allow outgoing.
+- Default deny incoming; default allow outgoing.
 
 Splunk Enterprise Installation:
 - Version: Splunk Enterprise `10.2.3` (`.deb` package).
@@ -179,7 +178,62 @@ Quality of Life & Troubleshooting:
 - Cleaned old event data and removed deprecated indexes to prevent double-ingestion and storage bloat.
   - `sudo /opt/splunk/bin/splunk clean eventdata -index index_name` 
 
-## *3.4. Linux Workstation - Linux Workstation (Ubuntu)*
+## *3.4. Linux Workstation - ASH-LIN-USER (Ubuntu)*
+
+Host Setup: 
+- OS: Linux Ubuntu Desktop 24.04.4 LTS (64-bit).
+- User: joej (sudoers group).
+- Username: Joe Johnson.
+- Static IP: `10.0.0.20/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
+- IPv6: Disabled.
+- Tools Installed: `curl`, `vim`, `net-tools`, `traceroute`, `wget`, `htop`, `tcpdump`, `openssh-server`, `python3`, `python3-pip`, `mousepad`.
+- Power Settings: Screen blank set to Never; automatic screen lock disabled.
+
+Host Firewall Rules (UFW): 
+- Explicit outbound rule: `sudo ufw allow out to 10.0.0.210 port 9997 proto tcp` (Splunk Forwarder egress).
+- Default deny incoming; default allow outgoing.
+
+Logging: 
+- `rsyslog` enabled and running.
+- Verified log files: `/var/log/auth.log`, `/var/log/syslog`, `/var/log/kern.log`.
+
+Splunk Universal Forwarder (SUF) Setup: 
+- Installed Splunk Universal Forwarder (SUF).
+- Version: `10.2.3` Linux AMD64.
+- Service Account: `splunkfwd`.
+- Credentials: `splunkfw`.
+- Boot Start: Enabled.
+- Permissions: `setfacl` used to grant service user `splunkfwd` read access to `/var/log/`.
+- Add-on: `Splunk_TA_nix` installed in `/opt/splunkforwarder/etc/apps/`.
+- Updated the inputs.conf, outputs.conf, props.conf, and transforms.conf files to reduce & tune-out log noise.
+- Monitors configured in `default/inputs.conf` with `sourcetype=linux` and `disabled=0`:
+  - `[monitor:///var/log]` (file monitors)
+  - `[script://./bin/netstat.sh]` (network connections)
+  - `[script://./bin/who.sh]` (logged-in users)
+  - `[script://./bin/openPorts.sh]` (open ports)
+- `outputs.conf` points to `10.0.0.210:9997` (i.e. Port 9997 on the SIEM server).
+
+Tuning Notes: 
+- Disabled `ps.sh` monitoring after discovering it generated ~30% of total Linux index volume (13,280 events in a 15-minute window). Tuned `inputs.conf` to reduce noise.
+
+## *3.5. Windows Workstation - ASH-WIN-USER (Windows 11 Enterprise)*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
