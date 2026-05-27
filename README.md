@@ -218,11 +218,65 @@ Tuning Notes:
 
 ## *3.5. Windows Workstation - ASH-WIN-USER (Windows 11 Enterprise)*
 
+Host Setup: 
+- OS: Windows 11 Enterprise.
+- User: Jessica Wood
+- Workgroup: WORKGROUP (no Active Directory domain).
+- Static IP: `10.0.0.230/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
+- IPv6: Disabled.
+- Windows Security: Virus & Threat Protection enabled; App & Browser Control enabled.
+- Power: Screen off (never); Power mode (best performance).
+- Tools: Sysinternals Suite, Notepad++, Visual Studio Code.
 
+Windows Defender Firewall: 
+- Private profile active.
+- Outbound Rule: Splunk Forwarder - Allow TCP out to remote IP `10.0.0.210` on Port `9997`.
 
+Sysmon: 
+- Installed using SwiftOnSecurity configuration.
+- Key Event IDs for Detection:
+ - `1` - Process Creation (CommandLine, hashes, parent process).
+ - `2` - Network Connection
+ - `3` - Create Remote Thread (injection)
+ - `10` - Process Access (one process opens another)
+ - `11` - File Creation
+ - `12` / `13` - Registry Add/Delete/Set
+ - `22` - DNS Query
 
+Splunk Universal Forwarder (SUF) Setup:
+- Service Account: `splunkfwd`
+- Credentials: `splunkfw` / `xxxxxxxxxx`
+- Add-ons:
+  - Splunk Add-On for Microsoft Windows (Splunk_TA_Windows):
+  - Splunk Add-On for Sysmon:
+- Permission Fix: The splunkfwd service account was explicity granted read access to the Sysmon Operational channel to resolve `ErrorCode=5 (ACCESS DENIED)` in `splunkd.log`.
+- Props.conf Tuning: On the SIEM server `ASH-LIN-SIEM`, commented out `#rename = XmlWinEventLog` lines in `props.conf` to prevent sourcetype conflicts. 
 
+## *3.6. SQLDB Server - ASH-LIN-SQLDB (Linux Debian, Headless)*
 
+Host Setup:
+- OS: Linux Debian (GNU/Linux 13; headless, no GUI).
+- User: itadmin (sudoers group).
+- Static IP: `10.0.0.220/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
+- Network Config: Static IP assignment via `/etc/network/interfaces` (`ens33`). 
+- IPv6: Disabled via `sysctl`.
+
+Host Firewall Rules (UFW): 
+- Outbound rule to SIEM: `sudo ufw allow out to 10.0.0.210 port 9997 proto tcp`.
+- SSH (`22/tcp`) temporarily enabled during setup, then removed.
+- MariaDB port (`3306/tcp`) reserved for future application connectivity.
+
+Database: 
+- MariaDB installed and service enabled.
+- Future plans:
+  - Populate a "Bakery" sample database (with inventory and customer tables.
+  - Enable MariaDB Audit Plugin and General Query Logs for SQL injection detection.
+
+Logging & Forwarder: 
+- `rsyslog` enabled; logs verified at `/var/log/auth.log`, `/var/log/syslog`, `/var/log/kern.log`.
+- Splunk Universal Forwarder installed with service account `splunkfw` / `xxxxxxxxxx`.
+- `Splunk_TA_nix` deployed via SCP and configured for `index=linux`.
+- `setfacl` used to grant service account `splunkfwd` with read permissions to `/var/log/`.
 
 
 
