@@ -17,9 +17,11 @@ Once the network infrastructure is configured and baseline VM snapshots are crea
 
 ## 2. Network Architecture & Topology Diagram
 
-This project documents an end-to-end threat detection lab built using free, commercially available tooling. The environment is hosted on-prem on a single Windows 11 Home machine using VMware Workstation Pro as the Type-2 hypervisor. 
+The lab environment is hosted on-prem on a single Windows 11 Home machine using VMware Workstation Pro as the Type-2 hypervisor. In total, the lab consists of 6 virtual machines (VMs). 
 
-The lab consists of 6 virtual machines (VMs) in total. 
+<img src="./Network Architecture Diagram.png" width="1200" alt="Network Architecture Diagram for SIEM Detection Lab">
+
+Firewall Interfaces: 
 - The network firewall (`ASH-FW-PFS`) separates the network into a LAN-side and WAN-side.
 - The LAN interface leads to a flat internal network (`ASH-INT-LAN`, 10.0.0.0/24) consisting of 5 endpoint VMs.
 - The WAN interface (`NAT`, 192.168.183.200/24) leads out to the public internet through VMware Workstation's NAT (`VMnet8`) network.
@@ -37,35 +39,7 @@ DNS Resolution:
 | 5 | **ASH-LIN-USER**   | Linux Workstation   | Linux (Ubuntu 24.04.4 LTS)            | `10.0.0.240/24` |                      | UFW, rsyslog, SUF                                  |
 | 6 | **ASH-LIN-KALI**   | Linux Attackbox     | Linux Kali Xfce (GNU/Linux 2026.1)    | `10.0.0.250/24` |                      |                                                    |
 
-```mermaid
-graph TD
-    subgraph Host["Windows 11 Host (VMware Workstation Pro 17.6.4)"]
-        subgraph VMnet8["VMnet8 (NAT) — 192.168.183.0/24"]
-            WAN[("ASH-FW-PFS WAN<br/>192.168.183.200")]
-        end
-        subgraph ASH_INT_LAN["ASH-INT-LAN (LAN Segment) — 10.0.0.0/24"]
-            LAN[("ASH-FW-PFS LAN<br/>10.0.0.1/24<br/>DHCP: 10.0.0.100-199")]
-            SIEM["ASH-LIN-SIEM<br/>Debian + Splunk<br/>10.0.0.210"]
-            SQLDB["ASH-LIN-SQLDB<br/>Debian Headless + MariaDB<br/>10.0.0.220"]
-            WIN["ASH-WIN-USER<br/>Windows 11 + Sysmon<br/>10.0.0.230"]
-            LIN["ASH-LIN-USER<br/>Ubuntu Desktop<br/>10.0.0.240"]
-            KALI["ASH-LIN-KALI<br/>Kali Linux (Attacker)<br/>10.0.0.250"]
-        end
-    end
 
-    WAN -->|NAT| Internet((Internet))
-    LAN --> SIEM
-    LAN --> SQLDB
-    LAN --> WIN
-    LAN --> LIN
-    LAN --> KALI
-
-    SIEM <-->|9997/tcp| WIN
-    SIEM <-->|9997/tcp| LIN
-    SIEM <-->|9997/tcp| SQLDB
-    SIEM <-->|1514/udp| WAN
-    SIEM <-->|9997/tcp| WAN
-```
 
 ## 3. Lab Setup and Device Configuration
 ## *3.1. Hypervisor - VMware Workstation Pro*
