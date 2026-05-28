@@ -1,8 +1,17 @@
 # SIEM Detection Lab - for Threat Hunting & MITRE ATT&CK Simulation
 
+## Table Of Contents: 
+1. Executive Summary
+2. Network Architecture & Topology Diagram
+3. Lab Setup and Device Configuration
+4. Data Ingestion & Indexing Summary
+5. Detection Engineering & Alert Rules
+6. Lessons Learned & Best Practices
+7. Appendix
+
 ## 1. Executive Summary
 
-This project documents an end-to-end threat detection lab built using **Splunk SIEM**, and other free, commercially available tooling. It includes the detailed configurations and logging setup for 6 network devices, including walkthroughs for configuring the Splunk Universal Forwarder (SUF). 
+This project documents an end-to-end threat detection lab built using **Splunk SIEM**, and other free, commercially available tooling. It includes the detailed configurations and logging setup instructions for 6 network devices, including walkthroughs for configuring the Splunk Universal Forwarder (SUF). 
 
 Once the network infrastructure is configured and baseline VM snapshots are created, we can focus on threat simulation & detection. In this lab, 5+ MITRE ATT&CK techniques are simulated across both Windows and Linux endpoints. The corresponding Splunk (SPL) detection logic is documented and implemented as custom alert rules to identify, monitor, and alert on simulated attacker activity.
 
@@ -278,23 +287,216 @@ Logging & Forwarder:
 - `Splunk_TA_nix` deployed via SCP and configured for `index=linux`.
 - `setfacl` used to grant service account `splunkfwd` with read permissions to `/var/log/`.
 
+## *3.7. Kali Linux Attackbox - ASH-LIN-KALI (Simulating Attacker Machine on Internal Network)*
 
+Host Setup: 
+- OS:
+- User: ghostly
+- Static IP: `10.0.0.250/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
+- IPv6: Disabled
 
+Attacker Tooling: 
+- nmap, metasploit-framework, burpsuite, wireshark.
 
+Design Decisions (for Red Team realism): 
+- No Splunk Forwarder: SUF intentionally omitted, because in a real intrusion, an attacker would not forward their own logs to the victim’s SIEM. As such, detection must rely on artifacts left on target systems.
+- No Host Firewall (UFW): Host-based firewalls interfere with reverse-shells, netcat (nc) listeners, and certain scanning techniques. It is standard for dedicated attack VM's in lab environments to keep UFW disabled.
 
+Post-Install Fix: 
+- Keyboard stopped functioning after an upgrade. Resolved by adding `i8042.nomux=1` to the GRUB boot parameter and persisting it in `/etc/default/grub` followed by `update-grub`.
 
+## 4. Data Ingestion & Indexing Summary
+| Source        | Log Type                   | Transport         | Splunk Index | Sourcetype                           |
+| ------------- | -------------------------- | ----------------- | ------------ | ------------------------------------ |
+| ASH-FW-PFS    | System / Firewall / DHCP   | Syslog UDP `1514` | `pfsense`    | `pfsense:*`                          |
+| ASH-FW-PFS    | Suricata EVE JSON          | SUF TCP `9997`    | `suricata`   | `suricata:wan`, `suricata:lan`       |
+| ASH-LIN-USER  | auth, syslog, kern, audit  | SUF TCP `9997`    | `linux`      | `syslog`, `linux_audit`, `who`, etc. |
+| ASH-LIN-SQLDB | auth, syslog, kern         | SUF TCP `9997`    | `linux`      | `syslog`, etc.                       |
+| ASH-WIN-USER  | Security, System, Sysmon   | SUF TCP `9997`    | `windows`    | `XmlWinEventLog:*`                   |
 
+## 5. Detection Engineering & Alert Rules
 
+All rules are implemented in Splunk Enterprise as scheduled alerts running on a 5-minute cron schedule (`* /5 * * * *`). 
+- 24 hr expiration (default). 
+- Throttling enabled per `host` for 15 minutes (to prevent duplicate alerts and reduce alert fatigue). 
 
+Tuning Notes: In the future, implement *lookup-based allowlists (with version control)* instead of hardcoded exclusions in SPL (for whitelisting and tuning out false positives).
 
+## *5.1. T1110 - Brute Force*
 
+- Rule Name: Failed Login Attempts  
+- MITRE ATT&CK: T1110 (Brute Force), T1110.001 (Password Guessing), T1110.003 (Password Spraying)  
+- Description: Invalid username or password (more than 3 failed attempts in 10 minutes).
+- Severity: Medium
+- SPL Query: 
+ - `(index=pfsense source="pfsense" "authentication error") OR (index=linux source="/var/log/auth.log" "authentication failure") OR (index=windows source="XmlWinEventLog:Security" EventID="4625")`
+- Trigger Condition & Frequency: Number of results > 3; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
 
+## *5.2. T1078.001 - Valid Accounts: Default Accounts*
 
+- Rule Name: Login Attempt Using Factory Default Credentials
+- MITRE ATT&CK: T1078 (Valid Accounts), T1078.001 (Default Accounts)    
+- Description: Attempted logon using factory default credentials (username). 
+  - For firewall (admin, pfsense).
+  - For linux hosts (debian, ubuntu, admin, user, root).
+  - For windows hosts (admin, administrator, guest, localhost). 
+- Severity: Medium
+- SPL Query: 
+ - `(index=pfsense sourcetype="pfsense" ("user admin" OR "Authentication error for admin" OR "for user 'admin'")  OR ("user pfsense" OR "Authentication error for pfsense" OR "for user 'pfsense'")) 
+    OR (index=linux source="/var/log/auth.log" ("debian" OR "ubuntu" OR "admin" OR "user=user" OR "user user") OR ("fail" AND "root") OR ("new session" AND "root"))
+    OR (index=windows source="XmlWinEventLog:Security" (EventID=4624 OR EventID=4625 OR EventID=4648 OR EventID=4672) (user="admin*" OR user="guest" OR user="localhost"))`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
 
+Notes on Windows Event IDs:
+- `4624` — Successful Logon
+- `4625` — Failed Logon
+- `4648` — Logon using explicit credentials (runas, scheduled tasks, lateral movement)
+- `4672` — Special privileges assigned (admin-level logon)
 
+## *5.3. T1059 - Command & Scripting Interpreter*
 
+Three (3) separate alerts cover PowerShell, Windows Command Shell, and Unix Shell.
 
+### *5.3.1. T1059.001 - PowerShell*
 
+- Rule Name: Suspicious Command or Script Execution (Powershell)
+- Description: Potentially malicious command or script executed (Windows Powershell) (T1059.001). 
+  - Keywords: bypass, unrestricted, hidden, noprof, encodedcommand, executionpolicy, invoke-webrequest, invoke-restmethod, downloadstring, downloadfile, iex, invoke-expression, invoke-command, start-process, add-type, frombase64string, base64, invoke-mimikatz, invoke-shellcode, invoke-reflectivepeinjection.
+- Severity: Medium
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Microsoft-Windows-Powershell/Operational" EventID=4104 | eval CommandLine = coalesce(CommandLine, ScriptBlockText) | where match(CommandLine,"(?i)(bypass|unrestricted|hidden|noprof|encodedcommand|executionpolicy|invoke-webrequest|invoke-restmethod|downloadstring|downloadfile|iex|invoke-expression|invoke-command|start-process|add-type|frombase64string|base64|invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection)")`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes:
+  - Enable Powershell Script Block Logging (WinEvent ID `4104`) using Local Group Policy Editor to have visibility of Powershell commands that don't directly spawn a new process per Sysmon Event ID `1`. 
+  - `ScriptBlockText` field normalized to `CommandLine` field using `eval` and `coalesce` commands in SPL.
 
+### *5.3.2. T1059.003 - Windows Command Shell*
 
+- Rule Name: Suspicious Command or Script Execution (Cmd Shell)
+- Description: Potentially malicious command or script executed (Windows Command Shell) (T1059.003).
+  - Keywords: cmd.exe /ckqsuv, comspec, .bat, .cmd, \tmp\*\.bat.
+- Severity: Medium
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventID=1 | where match(Image,"(?i)\\cmd\\.exe$") | where match(CommandLine,"(?i)(?:/(?:c|k|q|s|u|v)|\bcomspec\b|%comspec%|\.bat\b|\.cmd\b|\\temp\\.*\.bat)") | where match(ParentImage,"(?i)\\b(?:rundll32|mshta|regsvr32|schtasks|psexec|wmic|wscript|cscript|powershell)(?:\\.exe)?$")`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
 
+### *5.3.3. T1059.004 - Unix Shell*
+
+- Rule Name: Suspicious Command or Script Execution (Unix Shell)
+- Description: Potentially malicious command or script executed (Unix Shell) (T1059.004).
+  - Keywords: bash -c, sh -c, python -c, perl -e, php -r, nc, ncat, socat, /dev/tcp, base64 -d, xxd -r.
+- Severity: Medium
+- SPL Query:
+  - `index=linux source="/var/log/audit/audit.log" sourcetype="linux_audit" type=EXECVE | where match(_raw,"(?i)(bash -c|sh -c|python -c|perl -e|php -r|nc .* -e|ncat .* -e|socat .*tcp|/dev/tcp|base64 -d|xxd -r)") 
+OR (match(_raw,"(?i)(/tmp|/var/tmp|/dev/shm)") AND match(_raw,"(?i)\\b(bash|sh|python|perl|php|nc|ncat|socat)\\b"))`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+
+## *5.4. T1021 - Remote Services*
+
+Three separate alerts cover RDP, SMB, and SSH.
+
+### *5.4.1. T1021.001 - Remote Services (RDP)*
+
+- Rule Name: Remote Login Attempt (Windows)
+- Description: Remote login attempt detected over RDP (Port 3389).
+- Severity: Medium
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Security" (EventID=4624 OR EventID=4625) (LogonType=3 OR LogonType=10)`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes: Need to enable Remote Desktop on Windows endpoint to simulate & test this detection. 
+
+### *5.4.2. T1021.002 - SMB / Windows Admin Shares*
+
+- Rule Name: Remote Access to Windows Administrative Shares (SMB)
+- Description: See remote logons (EventID=4624, LogonType=3) and access / activity for Windows administrative shares (C$, ADMIN$, IPC$).
+- Severity: Medium
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Security" (EventID=4624 OR EventID=5140 OR EventID=5145) | eval is_admin_share = if(match(ShareName,"(?i)\\\\(C\$|ADMIN\$|IPC\$)"),1,0) | where (EventID=4624 AND LogonType=3) OR is_admin_share=1`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes: On the Windows endpoint, Need to enable 'File & Printer Sharing', allow local administrator accounts to authenticate remotely over SMB (see Powershell command below), and enable Object Access Auditing to enable logging for Event IDs `5140` & `5415` in order to simulate & test this detection.
+  - Powershell (as admin): `reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f`
+
+### *5.4.3. T1021.004 - Remote Services (SSH)*
+
+- Rule Name: Remote Login Attempt (Linux)
+- Description: Remote login attempt detected over SSH (Port 22, Linux).
+- Severity: Medium
+- SPL Query:
+  - `index=linux source="/var/log/auth.log" (("Accepted password" OR "Failed password") AND "ssh*")`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes: Need to enable SSH on Linux endpoint to simulate & test this detection. 
+
+## *5.6. T1003 - Credential Dumping*
+
+- Rule Name: Mimikatz or Credential Dumping Detected by Windows Defender
+- Description: Event ID 1116 (malware detected); Event ID 1117 (malware action taken - quarantine/delete).
+  - Searching for Threat_Name = mimikatz, credential, dump.
+- Severity: Critical
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Microsoft-Windows-Windows Defender/Operational" (EventID=1116 OR EventID=1117) | search (Threat_Name="*mimikatz*" OR Threat_Name="*credential*" OR Threat_Name="*dump*")`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes: Need to enable SSH on Linux endpoint to simulate & test this detection. 
+
+## *5.7. Windows Defender Malware Detected*
+
+- Rule Name: Malware Detected by Windows Defender
+- Description: Event ID 1116 (malware detected); Event ID 1117 (malware action taken - quarantine/delete).
+- MITRE ATT&CK: Depending on the threat identified, these events may correspond to techniques such as T1003 (Credential Dumping, T1562.001 (Disable or Modify Tools), T1547 (Boot or Logon Autostart Execution), or T1204 (User Execution).
+- Severity: Critical
+- SPL Query:
+  - `index=windows source="XmlWinEventLog:Microsoft-Windows-Windows Defender/Operational" (EventID=1116 OR EventID=1117)`
+- Trigger Condition & Frequency: Number of results > 0; For each result. 
+- Throttling: Suppress results containing field value `host` for 15 minutes.
+- Notes: Need to enable SSH on Linux endpoint to simulate & test this detection. 
+
+## 6. Lessons Learned & Best Practices
+
+1. Snapshot Discipline: The three-tier snapshot strategy (OS baseline → network config → pre-detection) saved significant time during Suricata crashes and Splunk misconfigurations.
+2. Suricata Resource Management: Enabling the full Emerging Threats ruleset on a 1 GB firewall VM caused swap exhaustion and kernel panics. Limiting the ruleset and increasing RAM to 2 GB resolved this.
+3. Port Elevation for Syslog: Running Splunk as a non-root service account (`splunk`) necessitated using port `1514/udp` instead of `514/udp` for syslog ingestion. This is a production-grade security practice.
+4. ACLs over Ownership: On Linux endpoints, `setfacl` was preferable to changing file ownership under `/var/log/`, preserving system integrity while granting the forwarder read access.
+5. Sourcetype Hygiene: The `TA-pfsense` add-on and proper `props.conf` management prevented “messy” unstructured logs. Renaming the extracted folder from `TA-pfsense-main` to `TA-pfsense` was required for Splunk to recognize the app.
+6. Windows Service Account Permissions: The Sysmon channel explicitly denied the `splunkfwd` service account until read permissions were granted—an easily missed step that breaks Windows endpoint visibility.
+7. Linux Noise Reduction: The `Splunk_TA_nix` `ps.sh` script generated 30% of all Linux index volume. Disabling unneeded scripted inputs is essential for storage and search performance.
+8. Attacker VM Realism: Intentionally omitting a forwarder and host firewall on the Kali box forces the analyst to detect attacks via target-side telemetry, mirroring real-world conditions.
+
+## 7. Appendix:
+
+## *7.1. pfSense Suricata Log Paths*
+
+/var/log/suricata/suricata_em051045/eve.json   (WAN)
+/var/log/suricata/suricata_em144243/eve.json   (LAN)
+
+## *7.2. Splunk Configuration File Precedence*
+
+| Priority | Location                   | Use Case                          |
+| -------- | -------------------------- | --------------------------------- |
+| 1        | `/etc/system/local/`       | Site-specific overrides (highest) |
+| 2        | `/etc/apps/<app>/local/`   | App-specific user changes         |
+| 3        | `/etc/apps/<app>/default/` | App developer defaults            |
+| 4        | `/etc/system/default/`     | Splunk factory settings (lowest)  |
+
+## *7.3. Useful SPL Admin Queries*
+
+- View index sizes in MB:
+  - `| dbinspect index=* | eval MB=sizeOnDiskMB | stats sum(MB) AS MB BY index`
+
+- View event count per index:
+  - `| eventcount summarize=false index=*`
+
+## *7.4. **pfSense Suricata Log Paths***
+
+- MariaDB Audit Logging: Enable General Query Log / Audit Plugin on `ASH-LIN-SQLDB` to detect SQL injection (T1190) and unauthorized data access.
+- Active Directory Domain: Promote  or add a Windows Server DC to simulate domain-joined detection logic (Kerberos, Group Policy) for the Windows endpoint `ASH-WIN-USER`.
+- pfBlockerNG: Deploy for GeoIP and threat intelligence feed blocking, generating additional deny-log telemetry.
+- Impossible Travel / New Source IP: Enrich Remote Services alerts with geolocation and time-based correlation.
+- Sysmon DNS (Event ID 22): Correlate DNS queries with suspicious PowerShell download cradles.
