@@ -1,13 +1,13 @@
 # SIEM Detection Lab - for Threat Hunting & MITRE ATT&CK Simulation
 
 ## Table Of Contents: 
-1. Executive Summary
-2. Network Architecture & Topology Diagram
-3. Lab Setup and Device Configuration
-4. Data Ingestion & Indexing Summary
-5. Detection Engineering & Alert Rules
-6. Lessons Learned & Best Practices
-7. Appendix
+1. [Executive Summary](#1-executive-summary)
+2. [Network Architecture & Topology Diagram](#2-network-architecture--topology-diagram)
+3. [Lab Setup and Device Configuration](#3-lab-setup-and-device-configuration)
+4. [Data Ingestion & Indexing Summary](#4-data-ingestion--indexing-summary)
+5. [Detection Engineering & Alert Rules](#5-detection-engineering--alert-rules)
+6. [Lessons Learned & Best Practices](#6-lessons-learned--best-practices)
+7. [Appendix](#7-appendix)
 
 ## 1. Executive Summary
 
@@ -21,6 +21,15 @@ The lab environment is hosted on-prem on a single Windows 11 Home machine using 
 
 <img src="./Network Architecture Diagram.png" width="1200" alt="Network Architecture Diagram for SIEM Detection Lab">
 
+| # | Device Name        | Description         |  OS                                   | LAN IP          | WAN IP               | Notes                                              |
+| - | ------------------ | ----------------    | --------------------                  | --------------- | -------------------- | -------------------------------------------------- |
+| 1 | **ASH-FW-PFS**     | Network Firewall    | pfSense CE (2.8.1)                    | `10.0.0.1/24`   | `192.168.183.200/24` | Syslog (RFC 5424), Suricata IDS (eve.json)         |
+| 2 | **ASH-LIN-SIEM**   | Splunk SIEM Server  | Linux Debian (GNU/Linux 13, GUI)      | `10.0.0.210/24` |                      | UFW, Splunk Enterprise / Free, rsyslog             |
+| 3 | **ASH-LIN-SQLDB**  | SQLDB Server        | Linux Debian (GNU/Linux 13, Headless) | `10.0.0.220/24` |                      | UFW, MariaDB, rsyslog, SUF                         |
+| 4 | **ASH-WIN-USER**   | Windows Workstation | Windows 11 Enterprise                 | `10.0.0.230/24` |                      | Sysmon (SwiftOnSecurity Config), Sysinternals, SUF |
+| 5 | **ASH-LIN-USER**   | Linux Workstation   | Linux (Ubuntu 24.04.4 LTS)            | `10.0.0.240/24` |                      | UFW, rsyslog, SUF                                  |
+| 6 | **ASH-LIN-KALI**   | Linux Attackbox     | Linux Kali Xfce (GNU/Linux 2026.1)    | `10.0.0.250/24` |                      | No firewall or SUF                                 |
+
 Firewall Interfaces: 
 - The network firewall (`ASH-FW-PFS`) separates the network into a LAN-side and WAN-side.
 - The LAN interface leads to a flat internal network (`ASH-INT-LAN`, 10.0.0.0/24) consisting of 5 endpoint VMs.
@@ -29,17 +38,6 @@ Firewall Interfaces:
 DNS Resolution: 
 - All internal hosts resolve through the pfSense DNS Resolver service at 10.0.0.1.
 - External resolution forwards to Google DNS (8.8.8.8, 8.8.4.4).
-
-| # | Device Name        | Description         |  OS                                   | LAN IP          | WAN IP               | Notes                                              |
-| - | ------------------ | ----------------    | --------------------                  | --------------- | -------------------- | -------------------------------------------------- |
-| 1 | **ASH-FW-PFS**     | Network Firewall    | pfSense CE (2.8.1)                    | `10.0.0.1/24`   | `192.168.183.200/24` | Syslog (RFC 5424), Suricata IDS (eve.json)         |
-| 2 | **ASH-LIN-SIEM**   | Splunk SIEM Server  | Linux Debian (GNU/Linux 13, GUI)      | `10.0.0.210/24` |                      | UFW, Splunk Enterprise / Free, rsyslog             |
-| 3 | **ASH-LIN-SQLDB**  | SQLDB Server        | Linux Debian (GNU/Linux 13, Headless) | `10.0.0.220/24` |                      | UFW, MariaDB, rsyslog, SUF                         |
-| 4 | **ASH-WIN-USER**   | Windows Workstation | Windows 11 Enterprise                 | `10.0.0.230/24` |                      | Sysmon (SwiftOnSecurity Config), Sysinternals, SUF |
-| 5 | **ASH-LIN-USER**   | Linux Workstation   | Linux (Ubuntu 24.04.4 LTS)            | `10.0.0.240/24` |                      | UFW, rsyslog, SUF                                  |
-| 6 | **ASH-LIN-KALI**   | Linux Attackbox     | Linux Kali Xfce (GNU/Linux 2026.1)    | `10.0.0.250/24` |                      |                                                    |
-
-
 
 ## 3. Lab Setup and Device Configuration
 ## *3.1. Hypervisor - VMware Workstation Pro*
@@ -264,7 +262,7 @@ Logging & Forwarder:
 ## *3.7. Kali Linux Attackbox - ASH-LIN-KALI (Simulating Attacker Machine on Internal Network)*
 
 Host Setup: 
-- OS:
+- OS: Linux Kali Xfce (GNU/Linux 2026.1)
 - User: ghostly
 - Static IP: `10.0.0.250/24`, Gateway: `10.0.0.1`, DNS: `10.0.0.1`.
 - IPv6: Disabled
@@ -447,8 +445,8 @@ Three separate alerts cover RDP, SMB, and SSH.
 
 ## *7.1. pfSense Suricata Log Paths*
 
-/var/log/suricata/suricata_em051045/eve.json   (WAN)
-/var/log/suricata/suricata_em144243/eve.json   (LAN)
+- /var/log/suricata/suricata_em051045/eve.json   (WAN)
+- /var/log/suricata/suricata_em144243/eve.json   (LAN)
 
 ## *7.2. Splunk Configuration File Precedence*
 
@@ -467,10 +465,10 @@ Three separate alerts cover RDP, SMB, and SSH.
 - View event count per index:
   - `| eventcount summarize=false index=*`
 
-## *7.4. **pfSense Suricata Log Paths***
+## *7.4. **Future Enhancements & Upcoming Features***
 
 - MariaDB Audit Logging: Enable General Query Log / Audit Plugin on `ASH-LIN-SQLDB` to detect SQL injection (T1190) and unauthorized data access.
 - Active Directory Domain: Promote  or add a Windows Server DC to simulate domain-joined detection logic (Kerberos, Group Policy) for the Windows endpoint `ASH-WIN-USER`.
 - pfBlockerNG: Deploy for GeoIP and threat intelligence feed blocking, generating additional deny-log telemetry.
 - Impossible Travel / New Source IP: Enrich Remote Services alerts with geolocation and time-based correlation.
-- Sysmon DNS (Event ID 22): Correlate DNS queries with suspicious PowerShell download cradles.
+- Sysmon DNS (Event ID 22): Correlate DNS queries with suspicious PowerShell downloads.
