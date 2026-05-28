@@ -370,9 +370,9 @@ OR (match(_raw,"(?i)(/tmp|/var/tmp|/dev/shm)") AND match(_raw,"(?i)\\b(bash|sh|p
 
 ## *5.4. T1021 - Remote Services*
 
-Three separate alerts cover RDP, SMB, and SSH.
+Three (3) separate alerts cover RDP, SMB, and SSH.
 
-### *5.4.1. T1021.001 - Remote Services (RDP)*
+### *5.4.1. T1021.001 - Remote Desktop Protocol (RDP)*
 
 - Rule Name: Remote Login Attempt (Windows)
 - Description: Remote login attempt detected over RDP (Port 3389).
@@ -395,7 +395,7 @@ Three separate alerts cover RDP, SMB, and SSH.
 - Notes: On the Windows endpoint, Need to enable 'File & Printer Sharing', allow local administrator accounts to authenticate remotely over SMB (see Powershell command below), and enable Object Access Auditing to enable logging for Event IDs `5140` & `5415` in order to simulate & test this detection.
   - Powershell (as admin): `reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f`
 
-### *5.4.3. T1021.004 - Remote Services (SSH)*
+### *5.4.3. T1021.004 - Secure Shell (SSH)*
 
 - Rule Name: Remote Login Attempt (Linux)
 - Description: Remote login attempt detected over SSH (Port 22, Linux).
